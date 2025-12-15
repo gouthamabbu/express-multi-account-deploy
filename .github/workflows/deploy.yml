@@ -1,0 +1,117 @@
+name: Build and Deploy
+
+permissions:
+  id-token: write
+  contents: read
+
+on:
+  workflow_dispatch:
+    inputs:
+      deploy_target:
+        description: "Where do you want to deploy?"
+        required: true
+        type: choice
+        options:
+          - account-a
+          - account-b
+          - both
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+    # -----------------------------
+    # Checkout code
+    # -----------------------------
+    - name: Checkout repository
+      uses: actions/checkout@v4
+
+    # -----------------------------
+    # Install AWS CLI
+    # -----------------------------
+    - name: Install AWS CLI
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y awscli
+
+    # -----------------------------
+    # Build Docker image (ONCE)
+    # -----------------------------
+    - name: Build Docker image
+      run: |
+        docker build -t app:${{ github.sha }} .
+
+    # =========================================================
+    # ACCOUNT A
+    # =========================================================
+    - name: Configure AWS credentials (Account A)
+      if: ${{ inputs.deploy_target == 'account-a' || inputs.deploy_target == 'both' }}
+      uses: aws-actions/configure-aws-credentials@v4
+      with:
+        role-to-assume: arn:aws:iam::692859952204:role/github-actions-deploy-role
+        aws-region: ap-south-1
+
+    - name: Push image to ECR (Account A)
+      if: ${{ inputs.deploy_target == 'account-a' || inputs.deploy_target == 'both' }}
+      run: |
+        aws ecr get-login-password \
+          | docker login --username AWS --password-stdin 692859952204.dkr.ecr.ap-south-1.amazonaws.com
+
+        docker tag app:${{ github.sha }} \
+          692859952204.dkr.ecr.ap-south-1.amazonaws.com/express-poc:${{ github.sha }}
+
+        docker push \
+          692859952204.dkr.ecr.ap-south-1.amazonaws.com/express-poc:${{ github.sha }}
+
+    - name: Deploy to EC2 via SSM (Account A)
+      if: ${{ inputs.deploy_target == 'account-a' || inputs.deploy_target == 'both' }}
+      run: |
+        aws ssm send-command \
+          --document-name "AWS-RunShellScript" \
+          --targets "Key=instanceIds,Values=i-0d1a3a9405270500b" \
+          --comment "Deploy Express App" \
+          --parameters commands="$(cat << 'EOF'
+        docker pull 692859952204.dkr.ecr.ap-south-1.amazonaws.com/express-poc:${{ github.sha }}
+        docker stop app || true
+        docker rm app || true
+        docker run -d --name app -p 80:3000 692859952204.dkr.ecr.ap-south-1.amazonaws.com/express-poc:${{ github.sha }}
+        EOF
+        )"
+
+    # =========================================================
+    # ACCOUNT B
+    # =========================================================
+    - name: Configure AWS credentials (Account B)
+      if: ${{ inputs.deploy_target == 'account-b' || inputs.deploy_target == 'both' }}
+      uses: aws-actions/configure-aws-credentials@v4
+      with:
+        role-to-assume: arn:aws:iam::433417823423:role/github-actions-deploy-role
+        aws-region: ap-south-1
+
+    - name: Push image to ECR (Account B)
+      if: ${{ inputs.deploy_target == 'account-b' || inputs.deploy_target == 'both' }}
+      run: |
+        aws ecr get-login-password \
+          | docker login --username AWS --password-stdin 433417823423.dkr.ecr.ap-south-1.amazonaws.com
+
+        docker tag app:${{ github.sha }} \
+         433417823423.dkr.ecr.ap-south-1.amazonaws.com/express-poc:${{ github.sha }}
+
+        docker push \
+          433417823423.dkr.ecr.ap-south-1.amazonaws.com/express-poc:${{ github.sha }}
+
+    - name: Deploy to EC2 via SSM (Account B)
+      if: ${{ inputs.deploy_target == 'account-b' || inputs.deploy_target == 'both' }}
+      run: |
+        aws ssm send-command \
+          --document-name "AWS-RunShellScript" \
+          --targets "Key=instanceIds,Values=i-056f0d506b098933f" \
+          --comment "Deploy Express App" \
+          --parameters commands="$(cat << 'EOF'
+        docker pull 433417823423.dkr.ecr.ap-south-1.amazonaws.com/express-poc:${{ github.sha }}
+        docker stop app || true
+        docker rm app || true
+        docker run -d --name app -p 80:3000 433417823423.dkr.ecr.ap-south-1.amazonaws.com/express-poc:${{ github.sha }}
+        EOF
+        )"
