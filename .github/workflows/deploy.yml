@@ -1,14 +1,10 @@
-name: Build and Deploy
-
-permissions:
-  id-token: write
-  contents: read
+name: Build and Deploy Express App
 
 on:
   workflow_dispatch:
     inputs:
       deploy_target:
-        description: "Where do you want to deploy?"
+        description: "Where to deploy"
         required: true
         type: choice
         options:
@@ -16,94 +12,86 @@ on:
           - account-b
           - both
 
+permissions:
+  id-token: write
+  contents: read
+
+env:
+  APP_TAG: express
+  CONTAINER_NAME: app
+  APP_PORT: "3000"
+  HOST_PORT: "80"
+
 jobs:
   deploy:
     runs-on: ubuntu-latest
 
     steps:
-    # -----------------------------
-    # Checkout code
-    # -----------------------------
-    - name: Checkout repository
-      uses: actions/checkout@v4
+      - name: Checkout
+        uses: actions/checkout@v4
 
-    # -----------------------------
-    # Build Docker image (ONCE)
-    # -----------------------------
-    - name: Build Docker image
-      run: |
-        docker build -t app:${{ github.sha }} .
+      # =========================
+      # ACCOUNT A
+      # =========================
+      - name: Configure AWS (Account A)
+        if: inputs.deploy_target == 'account-a' || inputs.deploy_target == 'both'
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN_ACCOUNT_A }}
+          aws-region: ${{ secrets.AWS_REGION_ACCOUNT_A }}
 
-    # =========================================================
-    # ACCOUNT A
-    # =========================================================
-    - name: Configure AWS credentials (Account A)
-      if: ${{ inputs.deploy_target == 'account-a' || inputs.deploy_target == 'both' }}
-      uses: aws-actions/configure-aws-credentials@v4
-      with:
-        role-to-assume: arn:aws:iam::692859952204:role/github-actions-role
-        aws-region: ap-south-1
+      - name: Build & Push Image (Account A)
+        if: inputs.deploy_target == 'account-a' || inputs.deploy_target == 'both'
+        run: |
+          aws ecr get-login-password --region ${{ secrets.AWS_REGION_ACCOUNT_A }} \
+          | docker login --username AWS --password-stdin ${{ secrets.ECR_URI_ACCOUNT_A }}
 
-    - name: Push image to ECR (Account A)
-      if: ${{ inputs.deploy_target == 'account-a' || inputs.deploy_target == 'both' }}
-      run: |
-        aws ecr get-login-password \
-          | docker login --username AWS --password-stdin 692859952204.dkr.ecr.ap-south-1.amazonaws.com
+          docker build -t ${{ secrets.ECR_URI_ACCOUNT_A }}:${{ github.sha }} .
+          docker push ${{ secrets.ECR_URI_ACCOUNT_A }}:${{ github.sha }}
 
-        docker tag app:${{ github.sha }} \
-          692859952204.dkr.ecr.ap-south-1.amazonaws.com/express-poc:${{ github.sha }}
+      - name: Deploy via SSM (Account A)
+        if: inputs.deploy_target == 'account-a' || inputs.deploy_target == 'both'
+        run: |
+          aws ssm send-command \
+            --targets "Key=tag:App,Values=${APP_TAG}" \
+            --document-name "AWS-RunShellScript" \
+            --comment "Deploy Express App - Account A" \
+            --parameters commands="[
+              \"aws ecr get-login-password --region ${{ secrets.AWS_REGION_ACCOUNT_A }} | docker login --username AWS --password-stdin ${{ secrets.ECR_URI_ACCOUNT_A }}\",
+              \"docker pull ${{ secrets.ECR_URI_ACCOUNT_A }}:${{ github.sha }}\",
+              \"docker rm -f ${CONTAINER_NAME} || true\",
+              \"docker run -d --restart unless-stopped --name ${CONTAINER_NAME} -p ${HOST_PORT}:${APP_PORT} ${{ secrets.ECR_URI_ACCOUNT_A }}:${{ github.sha }}\"
+            ]"
 
-        docker push \
-          692859952204.dkr.ecr.ap-south-1.amazonaws.com/express-poc:${{ github.sha }}
+      # =========================
+      # ACCOUNT B
+      # =========================
+      - name: Configure AWS (Account B)
+        if: inputs.deploy_target == 'account-b' || inputs.deploy_target == 'both'
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN_ACCOUNT_B }}
+          aws-region: ${{ secrets.AWS_REGION_ACCOUNT_B }}
 
-    - name: Deploy to EC2 via SSM (Account A)
-      if: ${{ inputs.deploy_target == 'account-a' || inputs.deploy_target == 'both' }}
-      run: |
-        aws ssm send-command \
-          --document-name "AWS-RunShellScript" \
-          --targets "Key=instanceIds,Values=i-0e71dbce5f19c68c1" \
-          --comment "Deploy Express App" \
-          --parameters commands="$(cat << 'EOF'
-        docker pull 692859952204.dkr.ecr.ap-south-1.amazonaws.com/express-poc:${{ github.sha }}
-        docker stop app || true
-        docker rm app || true
-        docker run -d --name app -p 80:3000 692859952204.dkr.ecr.ap-south-1.amazonaws.com/express-poc:${{ github.sha }}
-        EOF
-        )"
+      - name: Build & Push Image (Account B)
+        if: inputs.deploy_target == 'account-b' || inputs.deploy_target == 'both'
+        run: |
+          aws ecr get-login-password --region ${{ secrets.AWS_REGION_ACCOUNT_B }} \
+          | docker login --username AWS --password-stdin ${{ secrets.ECR_URI_ACCOUNT_B }}
 
-    # =========================================================
-    # ACCOUNT B
-    # =========================================================
-    - name: Configure AWS credentials (Account B)
-      if: ${{ inputs.deploy_target == 'account-b' || inputs.deploy_target == 'both' }}
-      uses: aws-actions/configure-aws-credentials@v4
-      with:
-        role-to-assume: arn:aws:iam::692859952204:role/github-actions-role
-        aws-region: us-east-1
+          docker build -t ${{ secrets.ECR_URI_ACCOUNT_B }}:${{ github.sha }} .
+          docker push ${{ secrets.ECR_URI_ACCOUNT_B }}:${{ github.sha }}
 
-    - name: Push image to ECR (Account B)
-      if: ${{ inputs.deploy_target == 'account-b' || inputs.deploy_target == 'both' }}
-      run: |
-        aws ecr get-login-password \
-          | docker login --username AWS --password-stdin 692859952204.dkr.ecr.us-east-1.amazonaws.com
-
-        docker tag app:${{ github.sha }} \
-         692859952204.dkr.ecr.us-east-1.amazonaws.com/express-poc:${{ github.sha }}
-
-        docker push \
-          692859952204.dkr.ecr.us-east-1.amazonaws.com/express-poc:${{ github.sha }}
-
-    - name: Deploy to EC2 via SSM (Account B)
-      if: ${{ inputs.deploy_target == 'account-b' || inputs.deploy_target == 'both' }}
-      run: |
-        aws ssm send-command \
-          --document-name "AWS-RunShellScript" \
-          --targets "Key=instanceIds,Values=i-0cf25da65c46f60a9" \
-          --comment "Deploy Express App" \
-          --parameters commands="$(cat << 'EOF'
-        docker pull 692859952204.dkr.ecr.us-east-1.amazonaws.com/express-poc:${{ github.sha }}
-        docker stop app || true
-        docker rm app || true
-        docker run -d --name app -p 80:3000 692859952204.dkr.ecr.us-east-1.amazonaws.com/express-poc:${{ github.sha }}
-        EOF
-        )"
+      - name: Deploy via SSM (Account B)
+        if: inputs.deploy_target == 'account-b' || inputs.deploy_target == 'both'
+        run: |
+          aws ssm send-command \
+            --targets "Key=tag:App,Values=${APP_TAG}" \
+            --document-name "AWS-RunShellScript" \
+            --comment "Deploy Express App - Account B" \
+            --parameters commands="[
+              \"aws ecr get-login-password --region ${{ secrets.AWS_REGION_ACCOUNT_B }} | docker login --username AWS --password-stdin ${{ secrets.ECR_URI_ACCOUNT_B }}\",
+              \"docker pull ${{ secrets.ECR_URI_ACCOUNT_B }}:${{ github.sha }}\",
+              \"docker rm -f ${CONTAINER_NAME} || true\",
+              \"docker run -d --restart unless-stopped --name ${CONTAINER_NAME} -p ${HOST_PORT}:${APP_PORT} ${{ secrets.ECR_URI_ACCOUNT_B }}:${{ github.sha }}\"
+            ]"
