@@ -57,10 +57,10 @@ jobs:
             --document-name "AWS-RunShellScript" \
             --comment "Deploy Express App - Account A" \
             --parameters commands="[
-              \"sudo aws ecr get-login-password --region ${{ secrets.AWS_REGION_ACCOUNT_A }} | docker login --username AWS --password-stdin ${{ secrets.ECR_URI_ACCOUNT_A }}\",
-              \"sudo docker pull ${{ secrets.ECR_URI_ACCOUNT_A }}:${{ github.sha }}\",
-              \"sudo docker rm -f ${CONTAINER_NAME} || true\",
-              \"sudo docker run -d --restart unless-stopped --name ${CONTAINER_NAME} -p ${HOST_PORT}:${APP_PORT} ${{ secrets.ECR_URI_ACCOUNT_A }}:${{ github.sha }}\"
+              \"aws ecr get-login-password --region ${{ secrets.AWS_REGION_ACCOUNT_A }} | docker login --username AWS --password-stdin ${{ secrets.ECR_URI_ACCOUNT_A }}\",
+              \"docker pull ${{ secrets.ECR_URI_ACCOUNT_A }}:${{ github.sha }}\",
+              \"docker rm -f ${CONTAINER_NAME} || true\",
+              \"docker run -d --restart unless-stopped --name ${CONTAINER_NAME} -p ${HOST_PORT}:${APP_PORT} ${{ secrets.ECR_URI_ACCOUNT_A }}:${{ github.sha }}\"
             ]"
 
       # =========================
